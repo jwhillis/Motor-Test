@@ -5,6 +5,7 @@
 #include <TimerOne.h>
 #include <EEPROM.h>
 #include <Wire.h>
+#include <Tone.h>
 
 #define dirPin 12
 #define stepPin 13
@@ -18,10 +19,14 @@ long microStep = 16;
 
 volatile int pgmmode = 0;
 boolean relayState = false;
+boolean centered = false;
+char serInput;
 unsigned long Timeout = millis();
 unsigned long timeOut;
 int relayTimeout;
+int speed = 5000;
 boolean down = false;
+boolean testing = false;
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 #define OLED_RESET 4        // Reset pin # (or -1 if sharing Arduino reset pin)
@@ -35,6 +40,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 ClickEncoder *encoder;
 int16_t last, value;
 
+Tone motor;
+
 // Function declarations
 void i2cScan();
 void blankHeader();
@@ -43,8 +50,11 @@ int readRotaryEncoder();
 void pgmButton();
 boolean encoderButton();
 void relayTrigger(int);
-void Menu();
 void moveBook(boolean);
+int getReading();
+void findSlop();
+void linearityTest();
+void findCenter();
 
 void setup()
 {
@@ -57,15 +67,15 @@ void setup()
   pinMode(RELAY, OUTPUT);
   pinMode(PGM, INPUT_PULLUP);
 
-#ifdef MOTOR
   pinMode(stepPin, OUTPUT);
   pinMode(dirPin, OUTPUT);
-#endif
+
+  motor.begin(stepPin);
+
   attachInterrupt(digitalPinToInterrupt(PGM), pgmButton, FALLING);
 
-#ifdef DEBUG
   Serial.begin(115200);
-#endif
+  Serial.println(F("Livescan Motor Test"));
   encoder = new ClickEncoder(7, 8, 9);
   encoder->setAccelerationEnabled(false);
   Timer1.initialize(1000);
@@ -93,10 +103,58 @@ void setup()
 
 void loop()
 {
-  if (millis() >= Timeout && relayState)
+  if (millis() >= Timeout) // Stub for timer operations
   {
-    relayTrigger(0);
+    Timeout = millis() + 10000;
+    // relayTrigger(0);
   }
+  if (Serial.available())
+  {
+    serInput = Serial.read();
+  }
+  if (serInput == 'c')
+  {
+    Serial.flush();
+    testing = false;
+  }
+  if (serInput == 'l')
+  {
+    Serial.flush();
+    testing = true;
+  }
+  if (serInput == 'r')
+  {
+    Serial.flush();
+    switch (digitalRead(dirPin))
+    {
+    case true:
+      digitalWrite(dirPin, LOW);
+      break;
+    case false:
+      digitalWrite(dirPin, HIGH);
+      break;
+    }
+  }
+  if (serInput == 'f')
+  {
+    Serial.flush();
+    speed = speed + 100;
+    Serial.println(speed);
+    serInput = ' ';
+  }
+
+  if (serInput == 's')
+  {
+    Serial.flush();
+    speed = speed - 100;
+    Serial.println(speed);
+    serInput = ' ';
+  }
+  if (testing)
+  {
+    linearityTest();
+  }
+  Serial.println(getReading());
 }
 
 void i2cScan()
@@ -235,114 +293,7 @@ void relayTrigger(int x)
     relayState = false;
   }
 }
-void Menu()
-{
-  int menuItem = 1;
-  blankHeader();
-  display.setTextSize(2);
-  display.print(F("  CONFIG  "));
-  display.setTextSize(1);
-  do
-  {
-    if (pgmmode == 0)
-    {
-      break;
-    }
-    display.setCursor(1, 25);
-    if (menuItem == 1)
-    {
-      display.setTextColor(BLACK, WHITE);
-    }
-    else
-    {
-      display.setTextColor(WHITE, BLACK);
-    }
-    display.println(F("Code Edit"));
-    if (menuItem == 2)
-    {
-      display.setTextColor(BLACK, WHITE);
-    }
-    else
-    {
-      display.setTextColor(WHITE, BLACK);
-    }
-    display.println(F("Sensitivity"));
-    if (menuItem == 3)
-    {
-      display.setTextColor(BLACK, WHITE);
-    }
-    else
-    {
-      display.setTextColor(WHITE, BLACK);
-    }
-    display.println(F("Relay Delay"));
-#ifdef AUDIO
-    if (menuItem == 4)
-    {
-      display.setTextColor(BLACK, WHITE);
-    }
-    else
-    {
-      display.setTextColor(WHITE, BLACK);
-    }
-    display.println(F("Track Select"));
-#endif
-#ifndef AUDIO
-    display.println();
-#endif
-#ifdef MOTOR
-    if (menuItem == 4)
-    {
-      display.setTextColor(BLACK, WHITE);
-    }
-    else
-    {
-      display.setTextColor(WHITE, BLACK);
-    }
-    display.println(F("Motor Setup"));
-#endif
-#ifndef MOTOR
-    display.println();
-#endif
 
-    display.display();
-    menuItem = menuItem + readRotaryEncoder();
-
-    if (menuItem < 1)
-    {
-      menuItem = 4;
-    }
-    if (menuItem > 4)
-    {
-      menuItem = 1;
-    }
-  } while (encoderButton());
-  if (!encoderButton())
-  {
-    switch (menuItem)
-    {
-    case 1:
-      // changeCode();
-      break;
-    case 2:
-      // changeTouch();
-      break;
-    case 3:
-      // changeTimeout();
-      break;
-#ifdef AUDIO
-    case 4:
-      trackSelect();
-#endif
-      break;
-#ifdef MOTOR
-    case 5:
-      distanceAdjust();
-#endif
-      break;
-    }
-  }
-}
 void moveBook(boolean u)
 {
   int y = EEPROM.read(60);
@@ -397,4 +348,62 @@ void moveBook(boolean u)
   }
 
   digitalWrite(dirPin, LOW);
+}
+int getReading()
+{
+  int samples = 10;
+  int reading = 0;
+  for (int x = 0; x < samples; x++)
+  {
+    reading = reading + analogRead(A1);
+  }
+  return reading / samples;
+}
+void findCenter()
+{
+  while (getReading() < 490 || getReading() > 510)
+  {
+    Serial.println(getReading());
+    digitalWrite(stepPin, HIGH);
+    digitalWrite(stepPin, LOW);
+    if (getReading() < 490)
+    {
+      digitalWrite(dirPin, HIGH);
+    }
+    if (getReading() > 510)
+    {
+      digitalWrite(dirPin, LOW);
+    }
+  }
+  centered = true;
+  Serial.println("Starting position found.");
+}
+void findSlop()
+{
+  while (!centered)
+  {
+    findCenter(); // Find the starting position
+  }
+  int start = getReading();
+
+  if (digitalRead(dirPin) == HIGH)
+  {
+    digitalWrite(dirPin, LOW);
+  }
+  int stepCount = 0;
+  while (getReading() == start)
+  {
+    digitalWrite(stepPin, HIGH);
+    digitalWrite(stepPin, LOW);
+    delay(10); // This delay is necessary to allow the ADC to settle
+    stepCount++;
+  }
+  Serial.print("Slop stepCount = ");
+  Serial.println(stepCount);
+  start = getReading();
+}
+void linearityTest()
+{
+  motor.play(speed, 250);
+  // delay(10); // This delay is necessary to allow the ADC to settle
 }
