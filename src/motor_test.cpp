@@ -24,9 +24,12 @@ char serInput;
 unsigned long Timeout = millis();
 unsigned long timeOut;
 int relayTimeout;
-int speed = 5000;
+int speed = 2000;
+boolean clockwise = false;
 boolean down = false;
-boolean testing = false;
+boolean testing = true;
+float start = 0.00;
+int stepCount = 0;
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 #define OLED_RESET 4        // Reset pin # (or -1 if sharing Arduino reset pin)
@@ -50,8 +53,7 @@ int readRotaryEncoder();
 void pgmButton();
 boolean encoderButton();
 void relayTrigger(int);
-void moveBook(boolean);
-int getReading();
+float getReading();
 void findSlop();
 void linearityTest();
 void findCenter();
@@ -103,6 +105,11 @@ void setup()
 
 void loop()
 {
+  if (digitalRead(PGM) == HIGH)
+  {
+    delay(100);
+    clockwise = !clockwise;
+  }
   if (millis() >= Timeout) // Stub for timer operations
   {
     Timeout = millis() + 10000;
@@ -124,8 +131,10 @@ void loop()
   }
   if (serInput == 'r')
   {
+
     Serial.flush();
-    switch (digitalRead(dirPin))
+    clockwise = !clockwise;
+    switch (clockwise)
     {
     case true:
       digitalWrite(dirPin, LOW);
@@ -150,11 +159,46 @@ void loop()
     Serial.println(speed);
     serInput = ' ';
   }
-  if (testing)
+  
+    if (testing)
   {
+    int posError = 0;
     linearityTest();
+    if (clockwise)
+    {
+      digitalWrite(dirPin, LOW);
+    }
+    else
+    {
+      digitalWrite(dirPin, HIGH);
+    }
+    if (getReading() > 1000)
+    {
+      clockwise = false;
+      speed = 2000;
+    }
+    if (getReading() < 24)
+    {
+      clockwise = true;
+      speed = 2000;
+    }
+    if (!clockwise)
+    {
+      posError = abs(24 - getReading()) * 10;
+    }
+    if (clockwise)
+    {
+      posError = abs(1000 - getReading()) * 10;
+    }
+    float tempSpeed = (speed * 0.5) + (posError * 0.5);
+
+    speed = constrain(tempSpeed, 1000, 8000);
   }
-  Serial.println(getReading());
+
+  start = getReading();
+  Serial.print(start);
+  Serial.print(",");
+  Serial.println(speed);
 }
 
 void i2cScan()
@@ -293,66 +337,10 @@ void relayTrigger(int x)
     relayState = false;
   }
 }
-
-void moveBook(boolean u)
+float getReading()
 {
-  int y = EEPROM.read(60);
-  long stepsMove = y * (64 * microStep); // inches to move
-  Serial.print("EEPROM.read(60) = ");
-  Serial.println(y);
-  Serial.print("64 * microStep = ");
-  Serial.println(64 * microStep);
-  Serial.print("stepsMove = ");
-  Serial.println(stepsMove);
-#ifdef DEBUG
-  Serial.println("Raising book back to starting position.");
-#endif
-  // Set the spinning direction
-  if (u)
-  {
-    digitalWrite(dirPin, HIGH);
-    down = false;
-  }
-  if (!u)
-  {
-    digitalWrite(dirPin, LOW);
-    down = true;
-  }
-
-  long accel = microStep * 30;
-  long dccel = accel;
-
-  for (int x = accel; x > 0; x--)
-  {
-    // These four lines result in 1 step:
-    digitalWrite(stepPin, HIGH);
-    delayMicroseconds(SPEED + (x * 2));
-    digitalWrite(stepPin, LOW);
-    delayMicroseconds(SPEED + (x * 2));
-  }
-  for (long x = 0; x < (stepsMove - (accel + dccel)); x++)
-  {
-    // These four lines result in 1 step:
-    digitalWrite(stepPin, HIGH);
-    delayMicroseconds(SPEED);
-    digitalWrite(stepPin, LOW);
-    delayMicroseconds(SPEED);
-  }
-  for (int x = 0; x <= dccel; x++)
-  {
-    // These four lines result in 1 step:
-    digitalWrite(stepPin, HIGH);
-    delayMicroseconds(SPEED + (x * 2));
-    digitalWrite(stepPin, LOW);
-    delayMicroseconds(SPEED + (x * 2));
-  }
-
-  digitalWrite(dirPin, LOW);
-}
-int getReading()
-{
-  int samples = 10;
-  int reading = 0;
+  float samples = 100.00;
+  float reading = 0.00;
   for (int x = 0; x < samples; x++)
   {
     reading = reading + analogRead(A1);
@@ -404,6 +392,10 @@ void findSlop()
 }
 void linearityTest()
 {
-  motor.play(speed, 250);
-  // delay(10); // This delay is necessary to allow the ADC to settle
+  // int stepCount = 0;
+  motor.play(speed, 200);
+  stepCount++;
+
+  // Serial.print("\tSlop stepCount = ");
+  // Serial.println(stepCount);
 }
